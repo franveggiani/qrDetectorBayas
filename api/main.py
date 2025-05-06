@@ -16,7 +16,7 @@ async def root():
     return {"message": "Hola carajo"}
 
 # EP01 - PROCESAR VIDEO
-@app.post("/qr_detector/")
+@app.post("/qr_detector")
 async def procesar_video(params: ProcesarVideoRequest):
 
     try:
