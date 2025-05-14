@@ -58,7 +58,7 @@ def generar_csv(datos, prefijo, salida_csv: str):
     for row in datos:
         for i in range(1, 5):  # Genera x1,y1 hasta x4,y4
             rows.append({
-                "image_name": f"{prefijo}_{row['frame']}.png",
+                "image_name": f"{prefijo}_{row['frame']}.png" if prefijo else f"{row['frame']}.png",
                 "x": row[f"x{i}"],
                 "y": row[f"y{i}"],
                 "r": 0,

@@ -24,8 +24,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copia todo en la carpeta del container
 COPY . .
 
-# Puertos utilizados
-EXPOSE 8000
-
-CMD ["uvicorn", "api.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
-
+# Ejecución Celery
+CMD ["celery", "-A", "tasks.tasks", "worker", "-Q", "qr_detector_queue", "--loglevel=info"]
