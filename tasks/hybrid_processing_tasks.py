@@ -7,6 +7,7 @@ from multiprocessing import Pool
 
 from celery import Celery, shared_task, group
 
+@shared_task
 def procesar_video_parallel(video_path: str, log_path: str, output_path: str, num_processes: int = 4, borde: int = 15):
     """
     Procesa un video en paralelo utilizando múltiples procesos para detectar códigos QR de manera híbrida.
@@ -32,20 +33,16 @@ def procesar_video_parallel(video_path: str, log_path: str, output_path: str, nu
     # Dividir el trabajo en frames
     frame_ranges = [(i * (total_frames // num_processes), (i + 1) * (total_frames // num_processes)) for i in range(num_processes)]    
     frame_ranges[-1] = (frame_ranges[-1][0], total_frames)  # Asegurarse de que el último proceso llegue hasta el final
+    
+    return frame_ranges
 
-    pool = Pool(processes=num_processes)
-    results = pool.starmap(procesar_frame_range_task, [(video_path, log_path, start, end, output_path, borde) for start, end in frame_ranges])
-    
-    pool.close()
-    pool.join()
-    
-    combinar_resultados(results=results)
-    
+@shared_task    
 def combinar_resultados(results):
     # Unir los resultados de todos los procesos
     datos = [item for sublist in results for item in sublist]
     return datos
 
+@shared_task 
 def procesar_frame_range_task(video_path: str, log_path: str, start_frame: int, end_frame: int, output:str, borde: int = 15, tamano_parche: int = 300):
     """
     Procesa un rango de frames de un video para detectar códigos QR de manera híbrida:
@@ -157,6 +154,7 @@ def procesar_frame_range_task(video_path: str, log_path: str, start_frame: int, 
     cap.release()
     return datos
 
+@shared_task
 def es_rectangulo_valido(points):
     """
     Verifica si los puntos forman un cuadrilátero válido basado en si los lados opuestos son paralelos.
