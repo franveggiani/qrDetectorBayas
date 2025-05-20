@@ -14,10 +14,10 @@ import numpy as np
 import os
 from pyzbar.pyzbar import decode
 
-from celery import Celery, shared_task, group, signature, chord
+from celery import Celery, shared_task, group, signature, chord, chain
 
 # Configuración de workers
-NUM_WORKERS = 1
+NUM_WORKERS = 4
 
 # Configuración de Celery
 app = Celery(
@@ -27,7 +27,6 @@ app = Celery(
     worker_concurrency=NUM_WORKERS,
     queue='qr_detector_queue'
 )
-
 
 @app.task
 def frame_ranges_task(input_folder, output_folder, video_name, modo: str = 'hibrido',
@@ -61,7 +60,7 @@ def frame_ranges_task(input_folder, output_folder, video_name, modo: str = 'hibr
 
 
 @app.task
-def generar_tareas_fr_task(frame_ranges, video_path: str, log_path: str, output_path: str):
+def generar_tareas_fr_task(frame_ranges, video_path: str, log_path: str, output_folder: str):
     """
     Genera tareas Celery para cada rango de frames.
 
@@ -69,7 +68,7 @@ def generar_tareas_fr_task(frame_ranges, video_path: str, log_path: str, output_
         frame_ranges (list): Lista de rangos de frames a procesar.
         video_path (str): Ruta al archivo de video.
         log_path (str): Ruta al archivo de log.
-        output_path (str): Ruta de salida para los resultados.
+        output_folder (str): Ruta de salida para los resultados.
 
     Returns:
         AsyncResult: Resultado asíncrono del chord de tareas.
@@ -82,19 +81,26 @@ def generar_tareas_fr_task(frame_ranges, video_path: str, log_path: str, output_
                 'log_path': log_path,
                 'start_frame': start,
                 'end_frame': end,
-                'output': output_path
+                'output_folder': output_folder
             },
             queue='qr_detector_queue'
         )
         for start, end in frame_ranges
     ]
+    
+    workflow = (
+        group(subtasks) |
+        signature('tasks.tasks.combinar_resultados_task', queue='qr_detector_queue') |
+        signature('tasks.tasks.generar_datos_task', kwargs={'output_folder': output_folder}, queue='qr_detector_queue')
+    )
 
-    return chord(subtasks)(combinar_resultados_task.s())
+    result = workflow.apply_async()
+    return result.id
 
 
 @app.task
 def procesar_frame_range_task(video_path: str, log_path: str, start_frame: int, end_frame: int,
-                            output: str, borde: int = 15, tamano_parche: int = 300):
+                            output_folder: str, borde: int = 15, tamano_parche: int = 300):
     """
     Procesa un rango específico de frames para detectar códigos QR.
 
@@ -103,7 +109,7 @@ def procesar_frame_range_task(video_path: str, log_path: str, start_frame: int, 
         log_path (str): Ruta al archivo de log.
         start_frame (int): Frame inicial del rango.
         end_frame (int): Frame final del rango.
-        output (str): Directorio de salida para los resultados.
+        output_folder (str): Directorio de salida para los resultados.
         borde (int, optional): Borde adicional alrededor del QR. Defaults to 15.
         tamano_parche (int, optional): Tamaño de los parches para dividir el frame. Defaults to 300.
 
@@ -111,7 +117,7 @@ def procesar_frame_range_task(video_path: str, log_path: str, start_frame: int, 
         list: Lista de diccionarios con información de los QRs detectados.
     """
     datos = []
-    os.makedirs(f'{output}/qr_frames/', exist_ok=True)
+    os.makedirs(f'{output_folder}/qr_frames/', exist_ok=True)
     cap = cv2.VideoCapture(video_path)
     frame_num = 0
 
@@ -172,7 +178,7 @@ def procesar_frame_range_task(video_path: str, log_path: str, start_frame: int, 
             with open(log_path, 'a') as log_file:
                 log_file.write(f'Error en el frame {frame_num}: {str(e)}\n')
 
-        cv2.imwrite(f'{output}/qr_frames/frame_completo_{frame_num}.png', frame)
+        cv2.imwrite(f'{output_folder}/qr_frames/frame_completo_{frame_num}.png', frame)
         frame_num += 1
 
     cap.release()
@@ -190,6 +196,9 @@ def combinar_resultados_task(results):
     Returns:
         list: Lista combinada de todos los resultados.
     """
+    
+    print("Combinando resultados de todas las tareas...")
+    
     return [item for sublist in results for item in sublist]
 
 
@@ -246,6 +255,12 @@ def generar_datos_task(datos, output_folder, prefijo: str = None, qr_det_csv: st
     Returns:
         dict: Diccionario con rutas de los archivos generados.
     """
+    
+    print("Generando archivos de salida...")
+    
+    if datos is None:
+        raise ValueError("No se han recibido datos en generar_datos_task.")
+    
     video_path = os.path.join(output_folder)
     qr_detections_path = os.path.join(output_folder, qr_det_csv)
     qr_temporal_file = os.path.join(output_folder, 'qr_temporal_graph.png')
@@ -261,9 +276,4 @@ def generar_datos_task(datos, output_folder, prefijo: str = None, qr_det_csv: st
         print("Generando el video con los recuadros de los códigos QR detectados...")
         generar_video_con_qr(video_path, datos, output_video_file, factor_lentitud)
 
-    return {
-        "qr_detections_path": qr_detections_path,
-        "qr_temporal_file": qr_temporal_file,
-        "qr_distribution_file": qr_distribution_file,
-        "output_folder": output_video_file if generar_video else "no generado"
-    }
+    
